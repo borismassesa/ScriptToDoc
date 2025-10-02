@@ -11,7 +11,7 @@ from typing import List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from pydantic import BaseModel, Field
 
@@ -104,6 +104,34 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/", response_class=HTMLResponse)
+async def root() -> str:
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <title>Transcript Trainer API</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 48px 24px; background: #0f172a; color: #e2e8f0; }
+          main { max-width: 640px; margin: 0 auto; background: rgba(15, 23, 42, 0.75); border-radius: 24px; padding: 40px 36px; box-shadow: 0 24px 80px rgba(15, 23, 42, 0.45); }
+          h1 { font-size: 2.25rem; margin-bottom: 0.5rem; }
+          p { margin: 0.75rem 0; line-height: 1.6; }
+          code, a { color: #38bdf8; }
+        </style>
+      </head>
+      <body>
+        <main>
+          <h1>Transcript Trainer API</h1>
+          <p>This endpoint powers the transcript-to-training document workflow.</p>
+          <p>POST <code>/process</code> with a transcript file to start a job, then poll <code>/status/&lt;job_id&gt;</code> for progress or download the generated Word document from <code>/documents/&lt;filename&gt;</code>.</p>
+          <p>For the full experience, open the web UI deployment or point your frontend at this API.</p>
+        </main>
+      </body>
+    </html>
+    """
 
 
 def _store_upload(file: UploadFile, target_path: Path) -> Path:
