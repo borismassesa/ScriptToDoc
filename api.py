@@ -26,11 +26,28 @@ from script_to_doc.pipeline import (
 
 
 BASE_DIR = Path(__file__).resolve().parent
-UPLOAD_DIR = BASE_DIR / "uploads"
-OUTPUT_DIR = BASE_DIR / "output_docs"
 
-UPLOAD_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
+
+def _ensure_writable_directory(path: Path, fallback_name: str) -> Path:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    except OSError:
+        fallback_root = Path(os.getenv("TMPDIR", "/tmp"))
+        fallback_path = fallback_root / fallback_name
+        fallback_path.mkdir(parents=True, exist_ok=True)
+        return fallback_path
+
+
+def _resolve_storage_dir(env_var: str, default_subdir: str) -> Path:
+    explicit = os.getenv(env_var)
+    if explicit:
+        return _ensure_writable_directory(Path(explicit), Path(explicit).name)
+    return _ensure_writable_directory(BASE_DIR / default_subdir, default_subdir)
+
+
+UPLOAD_DIR = _resolve_storage_dir("UPLOAD_DIR", "uploads")
+OUTPUT_DIR = _resolve_storage_dir("OUTPUT_DIR", "output_docs")
 
 ensure_nltk_resources()
 NLP_MODEL = load_spacy_model()

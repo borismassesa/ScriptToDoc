@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 import time
 from collections import Counter
@@ -162,6 +163,9 @@ class PipelineConfig:
 
 def ensure_nltk_resources() -> None:
     """Ensure the NLTK resources required for tokenization are available."""
+    data_dir = Path(os.getenv("NLTK_DATA", Path(os.getenv("TMPDIR", "/tmp")) / "nltk_data"))
+    os.environ.setdefault("NLTK_DATA", str(data_dir))
+    data_dir.mkdir(parents=True, exist_ok=True)
     resources = {
         "punkt": "tokenizers/punkt",
         "punkt_tab": "tokenizers/punkt_tab",
