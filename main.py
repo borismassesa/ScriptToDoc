@@ -7,13 +7,15 @@ from pathlib import Path
 
 from script_to_doc.pipeline import PipelineConfig, run_pipeline
 
-# Expose the FastAPI app when this file is imported by platforms like Vercel.
+# Expose the FastAPI app when this module is imported (e.g. on Vercel).
+_fastapi_app = None
 try:
-    from api import app as fastapi_app  # type: ignore
-except Exception:  # pragma: no cover - only used in serverless runtime
-    fastapi_app = None
+    from api import app as _fastapi_app  # type: ignore
+except Exception as exc:  # pragma: no cover - surfaces deployment issues
+    if __name__ != "__main__":
+        raise
 
-app = fastapi_app
+app = _fastapi_app
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
