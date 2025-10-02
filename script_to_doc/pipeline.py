@@ -1,45 +1,143 @@
 import logging
 import re
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import nltk
 from docx import Document
+from nltk import pos_tag, word_tokenize
+from nltk.corpus import stopwords
 from nltk.tokenize import sent_tokenize
-
-try:
-    import spacy
-    from spacy.language import Language
-except ImportError as exc:  # pragma: no cover - handled at runtime
-    raise RuntimeError("spaCy must be installed to use this pipeline") from exc
-
-try:  # Prefer the gensim TextRank implementation when available.
-    from gensim.summarization import summarize as _gensim_summarize  # type: ignore
-
-    def text_rank_summarize(text: str, *, ratio: float, word_count: Optional[int], split: bool) -> List[str]:
-        return _gensim_summarize(text, ratio=ratio, word_count=word_count, split=split)
-
-except ImportError:
-    try:
-        from summa.summarizer import summarize as _summa_summarize  # type: ignore
-
-        def text_rank_summarize(text: str, *, ratio: float, word_count: Optional[int], split: bool) -> List[str]:
-            kwargs: Dict[str, object] = {"ratio": ratio, "split": split}
-            if word_count is not None:
-                kwargs["words"] = word_count
-            return _summa_summarize(text, **kwargs)
-
-    except ImportError as exc:  # pragma: no cover - handled at runtime
-        raise RuntimeError(
-            "Neither gensim.summarization nor summa is available; install one to enable summarization."
-        ) from exc
 
 
 LOGGER = logging.getLogger(__name__)
 
 FILLER_WORDS = {"um", "uh", "like", "you know", "sort of", "kind of", "basically", "actually"}
+
+
+class SimpleToken:
+    """Minimal token representation with part-of-speech metadata."""
+
+    __slots__ = ("text", "pos_")
+
+    def __init__(self, text: str, pos: str) -> None:
+        self.text = text
+        self.pos_ = pos
+
+
+class SimpleDoc(list):
+    """List-like container that mimics the subset of spaCy's Doc we rely on."""
+
+    def __init__(self, tokens: Iterable[SimpleToken]) -> None:
+        super().__init__(tokens)
+
+
+class SimpleNLP:
+    """Lightweight fallback NLP pipeline built on NLTK."""
+
+    def __call__(self, text: str) -> SimpleDoc:
+        words = _word_tokenize_safe(text)
+        tagged = _pos_tag_safe(words)
+        return SimpleDoc(SimpleToken(word, tag) for word, tag in tagged)
+
+
+def _word_tokenize_safe(text: str) -> List[str]:
+    try:
+        return word_tokenize(text)
+    except LookupError:
+        return text.split()
+
+
+def _pos_tag_safe(words: Sequence[str]) -> List[Tuple[str, str]]:
+    try:
+        return pos_tag(words)
+    except LookupError:
+        tags: List[Tuple[str, str]] = []
+        for idx, word in enumerate(words):
+            if idx == 0:
+                tags.append((word, "VB"))
+            elif word.lower() in {"to", "and", "then"}:
+                tags.append((word, "CC"))
+            else:
+                tags.append((word, "NN"))
+        return tags
+
+
+def frequency_summarize(
+    text: str,
+    *,
+    ratio: float,
+    word_count: Optional[int],
+    split: bool,
+) -> List[str]:
+    """Summarize text by ranking sentences using term frequency weights."""
+    sentences = sent_tokenize(text)
+    if not sentences:
+        return []
+
+    bounded_ratio = max(0.0, min(ratio, 1.0))
+    target_count = max(1, int(round(len(sentences) * bounded_ratio)))
+    if word_count:
+        approx_sentence_target = max(1, word_count // 15)
+        target_count = max(target_count, approx_sentence_target)
+    target_count = min(target_count, len(sentences))
+
+    try:
+        stop_words = set(stopwords.words("english"))
+    except LookupError:
+        stop_words = set()
+
+    frequencies: Counter[str] = Counter()
+    for sentence in sentences:
+        tokens = _word_tokenize_safe(sentence)
+        for token in tokens:
+            lowered = token.lower()
+            if lowered.isalpha() and lowered not in stop_words:
+                frequencies[lowered] += 1
+
+    if not frequencies:
+        for sentence in sentences:
+            tokens = _word_tokenize_safe(sentence)
+            for token in tokens:
+                lowered = token.lower()
+                if lowered.isalpha():
+                    frequencies[lowered] += 1
+
+    if not frequencies:
+        return sentences if split else [" ".join(sentences)]
+
+    scored: List[Tuple[float, int, str]] = []
+    for idx, sentence in enumerate(sentences):
+        tokens = _word_tokenize_safe(sentence)
+        if not tokens:
+            continue
+        score = sum(frequencies.get(token.lower(), 0) for token in tokens if token.isalpha())
+        score /= max(len(tokens), 1)
+        scored.append((score, idx, sentence))
+
+    if not scored:
+        return sentences if split else [" ".join(sentences)]
+
+    scored.sort(reverse=True)
+    selected = sorted(scored[:target_count], key=lambda item: item[1])
+    ordered_sentences = [sentence for _, _, sentence in selected]
+
+    if word_count:
+        limited: List[str] = []
+        total_words = 0
+        for sentence in ordered_sentences:
+            limited.append(sentence)
+            total_words += len(sentence.split())
+            if total_words >= word_count:
+                break
+        ordered_sentences = limited
+
+    if not split:
+        return [" ".join(ordered_sentences)]
+    return ordered_sentences
 
 
 @dataclass
@@ -68,6 +166,8 @@ def ensure_nltk_resources() -> None:
         "punkt": "tokenizers/punkt",
         "punkt_tab": "tokenizers/punkt_tab",
         "stopwords": "corpora/stopwords",
+        "averaged_perceptron_tagger": "taggers/averaged_perceptron_tagger",
+        "averaged_perceptron_tagger_eng": "taggers/averaged_perceptron_tagger_eng",
     }
     for resource, location in resources.items():
         try:
@@ -76,15 +176,16 @@ def ensure_nltk_resources() -> None:
             nltk.download(resource)
 
 
-def load_spacy_model(model: str = "en_core_web_sm") -> "Language":
-    """Load a spaCy model, downloading it on demand if missing."""
-    try:
-        return spacy.load(model)
-    except OSError:
-        from spacy.cli import download
+def load_spacy_model(model: str = "en_core_web_sm") -> Callable[[str], Any]:
+    """Load a spaCy language model, or fall back to a lightweight NLTK-based tagger."""
+    try:  # Delay import so spaCy remains an optional dependency.
+        import spacy
 
-        download(model)
         return spacy.load(model)
+    except (ImportError, OSError):
+        LOGGER.info("Falling back to SimpleNLP; spaCy model '%s' unavailable", model)
+        ensure_nltk_resources()
+        return SimpleNLP()
 
 
 def load_transcripts(input_dir: Path) -> List[Tuple[Path, str]]:
@@ -138,7 +239,7 @@ def summarize_transcript(
     tone: str,
     audience: str,
 ) -> Tuple[List[str], Optional[Dict[str, int]]]:
-    """Summarize text using TextRank with graceful fallbacks for short input."""
+    """Summarize text using an LLM when available, otherwise frequency ranking."""
     if not cleaned_transcript:
         return [], None
 
@@ -167,7 +268,7 @@ def summarize_transcript(
             pass
 
     try:
-        summary_sentences = text_rank_summarize(
+        summary_sentences = frequency_summarize(
             cleaned_transcript,
             ratio=ratio,
             word_count=word_count,
@@ -182,15 +283,41 @@ def summarize_transcript(
     return summary_sentences[:max_sentences], usage
 
 
-def extract_steps(sentences: Sequence[str], nlp: "Language") -> List[str]:
+def _pos_tags(sentence: str, nlp: Optional[Callable[[str], Any]]) -> List[str]:
+    """Return part-of-speech tags for a sentence using the provided NLP engine or NLTK."""
+    if nlp is not None:
+        try:
+            doc = nlp(sentence.strip())
+        except Exception:
+            doc = []
+        tags: List[str] = []
+        for token in doc:
+            pos = getattr(token, "pos_", None)
+            if pos is None and isinstance(token, tuple) and len(token) > 1:
+                pos = token[1]
+            if pos:
+                tags.append(str(pos))
+        if tags:
+            return tags
+
+    words = _word_tokenize_safe(sentence)
+    if not words:
+        return []
+    return [tag for _, tag in _pos_tag_safe(words)]
+
+
+def extract_steps(sentences: Sequence[str], nlp: Optional[Callable[[str], Any]] = None) -> List[str]:
     """Identify likely process steps by looking for imperative sentences."""
     steps: List[str] = []
     for sentence in sentences:
-        doc = nlp(sentence.strip())
-        if not doc:
+        tags = _pos_tags(sentence, nlp)
+        if not tags:
             continue
-        first_token = doc[0]
-        if first_token.pos_ == "VERB" or (first_token.pos_ == "AUX" and len(doc) > 1 and doc[1].pos_ == "VERB"):
+        first_tag = tags[0]
+        second_tag = tags[1] if len(tags) > 1 else ""
+        if first_tag.startswith("VB") or (
+            first_tag in {"AUX", "MD"} and second_tag.startswith("VB")
+        ):
             steps.append(sentence.strip())
     return steps
 
@@ -269,7 +396,7 @@ def process_transcript(
     output_dir: Path,
     *,
     config: Optional[PipelineConfig] = None,
-    nlp: Optional["Language"] = None,
+    nlp: Optional[Callable[[str], Any]] = None,
     progress_callback: Optional[Callable[[str, float], None]] = None,
 ) -> Dict[str, object]:
     """Process a single transcript file into a Word document."""

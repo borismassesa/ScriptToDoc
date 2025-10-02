@@ -28,14 +28,14 @@ Key modules:
 
 - `script_to_doc.pipeline` supplies modular helpers:
   - `load_transcripts`, `clean_transcript` (timestamp + filler removal, sentence tokenization)
-  - `summarize_transcript` (TextRank summariser)
-  - `extract_steps` (spaCy imperative detection)
+  - `summarize_transcript` (frequency-based extractor built on NLTK)
+  - `extract_steps` (lightweight POS-driven imperative detection)
   - `expand_steps`, `create_word_document`
   - `process_transcript`, `run_pipeline` for orchestration
 - `PipelineConfig` centralises tunable settings (summary ratio, expander hook, document title).
 - `api.py` exposes the FastAPI backend with `/process` (file upload) and `/documents/{filename}` for downloads.
 
-The Word export uses `python-docx`, which lets us instantiate `Document()` and add headings/paragraphs programmatically [python-docx Quickstart](https://python-docx.readthedocs.io/en/latest/user/quickstart.html). Summaries rely on a TextRank implementation that extracts the most important sentences from the transcript [TextRank overview](https://radimrehurek.com/gensim_3.8.3/summarization/summariser.html).
+The Word export uses `python-docx`, which lets us instantiate `Document()` and add headings/paragraphs programmatically [python-docx Quickstart](https://python-docx.readthedocs.io/en/latest/user/quickstart.html). Summaries rely on a lightweight sentence-ranking approach that scores sentences via term frequencies, keeping the runtime small enough for serverless usage.
 
 ### Run the web API
 
@@ -80,7 +80,7 @@ export OPENAI_TEMPERATURE=0.2
 .venv/bin/uvicorn api:app --reload
 ```
 
-If any OpenAI call fails (missing key, quota, etc.) the pipeline automatically falls back to the deterministic TextRank + template approach.
+If any OpenAI call fails (missing key, quota, etc.) the pipeline automatically falls back to the deterministic NLTK sentence-ranking + template approach.
 
 ## Frontend (Next.js + Tailwind)
 
@@ -105,7 +105,7 @@ The `/process` endpoint now returns a job identifier immediately. The frontend p
 ## Development tips
 
 - Adjust filler words via `PipelineConfig.filler_words` or swap in a custom `step_expander` callable to integrate LLM-generated explanations.
-- Swap summarisation libraries by adapting `text_rank_summarize` within `pipeline.py`, or rely on `USE_OPENAI_WORKFLOW` to have OpenAI return a structured set of steps directly.
+- Swap summarisation behaviour by adapting the frequency-based logic within `pipeline.py`, or rely on `USE_OPENAI_WORKFLOW` to have OpenAI return a structured set of steps directly.
 - For production, restrict CORS origins in `api.py`, rotate job IDs regularly, and secure file storage.
 
 ## Testing
