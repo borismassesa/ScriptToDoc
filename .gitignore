@@ -1,0 +1,6 @@
+.env
+.venv/
+output_docs/
+uploads/
+transcript-trainer-ui/node_modules/
+transcript-trainer-ui/.next/
