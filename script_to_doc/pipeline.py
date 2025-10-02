@@ -166,6 +166,8 @@ def ensure_nltk_resources() -> None:
     data_dir = Path(os.getenv("NLTK_DATA", Path(os.getenv("TMPDIR", "/tmp")) / "nltk_data"))
     os.environ.setdefault("NLTK_DATA", str(data_dir))
     data_dir.mkdir(parents=True, exist_ok=True)
+    if str(data_dir) not in nltk.data.path:
+        nltk.data.path.insert(0, str(data_dir))
     resources = {
         "punkt": "tokenizers/punkt",
         "punkt_tab": "tokenizers/punkt_tab",
@@ -177,7 +179,7 @@ def ensure_nltk_resources() -> None:
         try:
             nltk.data.find(location)
         except LookupError:
-            nltk.download(resource)
+            nltk.download(resource, download_dir=str(data_dir))
 
 
 def load_spacy_model(model: str = "en_core_web_sm") -> Callable[[str], Any]:
