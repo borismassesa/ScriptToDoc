@@ -1,6 +1,6 @@
 # ScriptToDoc
 
-Transform meeting transcripts into structured training material and Word documents. The project contains a Python NLP pipeline plus a Next.js/MUI frontend for a polished user experience.
+Transform meeting transcripts into structured training material and Word documents. The project contains a Python NLP pipeline plus a Next.js/Taiwind CSS frontend for a polished user experience.
 
 ## Prerequisites
 
